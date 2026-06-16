@@ -54,7 +54,15 @@ def login(driver):
 def _entrar_cubiertas(driver):
     wait = WebDriverWait(driver, 20)
     wait.until(lambda d: d.execute_script("return typeof openLink === 'function';"))
+    ventanas_antes = set(driver.window_handles)
     driver.execute_script("openLink('W24CUB', '853', '/cubiertas/Login.aspx?empresa=853');")
+    time.sleep(3)
+
+    ventanas_despues = set(driver.window_handles)
+    nuevas = ventanas_despues - ventanas_antes
+    if nuevas:
+        driver.switch_to.window(nuevas.pop())
+
     wait.until(EC.url_contains("/cubiertas/"))
     time.sleep(2)
 
@@ -115,10 +123,8 @@ def capturar_cubiertas_panol(driver):
     ))
     time.sleep(2)
 
-    # Captura del listado completo (todas las cubiertas en pañol)
     _capturar_reporte(driver, LISTADO_PNG)
 
-    # Click en Totales y captura del resumen
     _click_totales(driver)
     _capturar_reporte(driver, TOTALES_PNG)
 
