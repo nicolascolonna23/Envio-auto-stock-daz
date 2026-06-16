@@ -1,230 +1,170 @@
-# captura_cubiertas_panol.py
-# Login menú -> openLink() handoff a Cubiertas -> reporte Stock en Pañol
-# -> click "Totales" (AJAX) -> captura del ReportViewer -> Gmail
-# Si algo falla, avisa por mail al mismo destinatario.
-
 import os
 import time
 import smtplib
-import traceback
 from email.message import EmailMessage
-from datetime import datetime
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# =====================================================
-# VARIABLES
-# =====================================================
-USUARIO   = os.environ["CUBIERTAS_USUARIO"]
-PASSWORD  = os.environ["CUBIERTAS_PASSWORD"]
+URL_LOGIN = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
+URL_PANOL = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"
 
-GMAIL_USER     = os.environ["GMAIL_USER"]
-GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]
-DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
+USUARIO = os.environ["CUBIERTAS_USUARIO"]
+PASSWORD = os.environ["CUBIERTAS_PASSWORD"]
 
-URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
-URL_CUB_LOGIN = "https://cloud.dazsistemas.com.ar/cubiertas/Login.aspx?empresa=853"
-URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"
+GMAIL_USER = os.environ["GMAIL_USER"]
+GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
+GMAIL_DEST = os.environ["GMAIL_DEST"]
 
-ARCHIVO_PNG = "totales_cubiertas.png"
+LISTADO_PNG = "listado_cubiertas.png"
+TOTALES_PNG = "totales_cubiertas.png"
 
-# =====================================================
-# CHROME
-# =====================================================
+SELECTORES_REPORTE = [
+    "span[id*='rvReporte_ReportViewer']",
+    "div[id*='ReportViewer']",
+    "div[id*='rvReporte']",
+    "iframe[id*='ReportFrame']",
+]
+
+
 def crear_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1400")
-    return webdriver.Chrome(options=options)
+    opciones = Options()
+    opciones.add_argument("--headless=new")
+    opciones.add_argument("--no-sandbox")
+    opciones.add_argument("--disable-dev-shm-usage")
+    opciones.add_argument("--disable-gpu")
+    opciones.add_argument("--window-size=1920,1400")
+    return webdriver.Chrome(options=opciones)
 
-# =====================================================
-# LOGIN (menú principal)
-# =====================================================
+
 def login(driver):
-    wait = WebDriverWait(driver, 30)
     driver.get(URL_LOGIN)
-    time.sleep(5)
-    user = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text']")))
-    pwd  = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='password']")))
-    driver.execute_script("arguments[0].value='';", user)
-    driver.execute_script("arguments[0].value='';", pwd)
-    user.send_keys(USUARIO)
-    pwd.send_keys(PASSWORD)
-    pwd.send_keys(Keys.ENTER)
-    time.sleep(8)
-    print("URL POST LOGIN:", driver.current_url)
+    wait = WebDriverWait(driver, 20)
+    campo_usuario = wait.until(EC.presence_of_element_located((By.ID, "txtUsuario")))
+    campo_password = driver.find_element(By.ID, "txtPassword")
+    campo_usuario.send_keys(USUARIO)
+    campo_password.send_keys(PASSWORD)
+    driver.find_element(By.ID, "btnIngresar").click()
+    wait.until(EC.url_contains("/menu/"))
 
-# =====================================================
-# HELPERS
-# =====================================================
+
 def _entrar_cubiertas(driver):
-    """Replica el ícono CUBIERTAS: openLink() autentica el módulo."""
-    handles_antes = list(driver.window_handles)
-    try:
-        driver.execute_script(
-            "openLink('W24CUB', '853', '/cubiertas/Login.aspx?empresa=853');"
+    wait = WebDriverWait(driver, 20)
+    wait.until(lambda d: d.execute_script("return typeof openLink === 'function';"))
+    driver.execute_script("openLink('W24CUB', '853', '/cubiertas/Login.aspx?empresa=853');")
+    wait.until(EC.url_contains("/cubiertas/"))
+    time.sleep(2)
+
+
+def _buscar_boton_totales(driver):
+    candidatos = driver.find_elements(
+        By.XPATH,
+        "//a[normalize-space()='Totales'] | //input[@value='Totales'] | "
+        "//span[normalize-space()='Totales'] | //div[normalize-space()='Totales'] | "
+        "//td[normalize-space()='Totales']",
+    )
+    if candidatos:
+        return candidatos[0]
+
+    for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
+        driver.switch_to.frame(iframe)
+        candidatos = driver.find_elements(
+            By.XPATH,
+            "//a[normalize-space()='Totales'] | //input[@value='Totales'] | "
+            "//span[normalize-space()='Totales'] | //div[normalize-space()='Totales'] | "
+            "//td[normalize-space()='Totales']",
         )
-        time.sleep(7)
-    except Exception as ex:
-        print("[!] openLink no disponible:", ex)
+        if candidatos:
+            return candidatos[0]
+        driver.switch_to.default_content()
 
-    nuevas = [h for h in driver.window_handles if h not in handles_antes]
-    if nuevas:
-        driver.switch_to.window(nuevas[-1])
-        time.sleep(3)
-
-    if "/menu/" in driver.current_url.lower():
-        driver.get(URL_CUB_LOGIN)
-        time.sleep(6)
-
-    print("Entró a CUBIERTAS:", driver.current_url)
+    return None
 
 
 def _click_totales(driver):
-    """Clickea el elemento cuyo texto es exactamente 'Totales' (prioriza <a>)."""
-    def buscar(ctx):
-        cands = ctx.find_elements(By.XPATH, "//a | //input | //span | //div | //td")
-        for pref in ("a", "input", "span", "div", "td"):
-            for e in cands:
-                try:
-                    if e.tag_name != pref:
-                        continue
-                    t = (e.text or e.get_attribute("value") or "").strip().lower()
-                    if t == "totales":
-                        driver.execute_script("arguments[0].click();", e)
-                        print("Click en 'Totales' (tag:", pref, ")")
-                        return True
-                except Exception:
-                    pass
-        return False
+    wait = WebDriverWait(driver, 30)
+    boton = wait.until(lambda d: _buscar_boton_totales(d))
+    boton.click()
+    time.sleep(3)
 
-    if buscar(driver):
-        return True
-    # por si el reporte está dentro de un iframe
-    for fr in driver.find_elements(By.TAG_NAME, "iframe"):
-        try:
-            driver.switch_to.frame(fr)
-            if buscar(driver):
-                driver.switch_to.default_content()
-                return True
-            driver.switch_to.default_content()
-        except Exception:
-            driver.switch_to.default_content()
-    return False
 
-# =====================================================
-# CAPTURAR TOTALES
-# =====================================================
-def capturar_totales(driver):
-    # 1) Autenticar el módulo Cubiertas
-    _entrar_cubiertas(driver)
-
-    # 2) Ir al reporte de stock en pañol
-    driver.get(URL_PANOL)
-    time.sleep(12)  # el ReportViewer tarda en renderizar
-    print("URL reporte:", driver.current_url)
-    if "login" in driver.current_url.lower():
-        print("[!] OJO: terminó en login del módulo.")
-
-    # 3) Click en "Totales" (dispara la recarga AJAX hacia el resumen)
-    if _click_totales(driver):
-        time.sleep(10)  # esperar que cargue la vista de totales
-    else:
-        print("[!] No se encontró 'Totales'. Capturo el reporte como está.")
-        time.sleep(3)
-
-    # 4) Capturar el ReportViewer (es un <span>, no un div)
-    selectores = [
-        "span[id*='rvReporte_ReportViewer']",
-        "[id*='rvReporte_ReportViewer']",
-        "[id*='ReportViewer']",
-        "[id*='oReportDiv']",
-        "div.contenido",
-    ]
+def _capturar_reporte(driver, ruta_png):
     elemento = None
-    for sel in selectores:
-        try:
-            elemento = driver.find_element(By.CSS_SELECTOR, sel)
-            print("Capturando elemento:", sel)
+    for selector in SELECTORES_REPORTE:
+        encontrados = driver.find_elements(By.CSS_SELECTOR, selector)
+        if encontrados:
+            elemento = encontrados[0]
             break
-        except Exception:
-            pass
 
-    try:
-        if elemento is not None:
-            elemento.screenshot(ARCHIVO_PNG)
-        else:
-            print("[!] No se ubicó el ReportViewer, capturo pantalla completa.")
-            driver.save_screenshot(ARCHIVO_PNG)
-        print("Captura guardada:", ARCHIVO_PNG)
-    except Exception as ex:
-        print("[!] Fallo la captura del elemento, capturo pantalla completa:", ex)
-        driver.save_screenshot(ARCHIVO_PNG)
+    if elemento is not None:
+        elemento.screenshot(ruta_png)
+    else:
+        driver.save_screenshot(ruta_png)
 
-    return ARCHIVO_PNG
 
-# =====================================================
-# ENVIAR CAPTURA POR GMAIL
-# =====================================================
-def enviar_gmail(ruta_png):
+def capturar_cubiertas_panol(driver):
+    _entrar_cubiertas(driver)
+    driver.get(URL_PANOL)
+
+    wait = WebDriverWait(driver, 30)
+    wait.until(lambda d: any(
+        d.find_elements(By.CSS_SELECTOR, selector) for selector in SELECTORES_REPORTE
+    ))
+    time.sleep(2)
+
+    # Captura del listado completo (todas las cubiertas en pañol)
+    _capturar_reporte(driver, LISTADO_PNG)
+
+    # Click en Totales y captura del resumen
+    _click_totales(driver)
+    _capturar_reporte(driver, TOTALES_PNG)
+
+
+def enviar_gmail(rutas_png):
     msg = EmailMessage()
-    hoy = datetime.now().strftime("%d/%m/%Y %H:%M")
-    msg["Subject"] = f"Totales Cubiertas en pañol - {hoy}"
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = DESTINATARIO
-    msg.set_content(f"Captura automática de Totales (Cubiertas en pañol) generada el {hoy}.")
+    msg["Subject"] = "Reporte semanal - Cubiertas en pañol"
+    msg["From"] = GMAIL_USER
+    msg["To"] = GMAIL_DEST
+    msg.set_content("Se adjuntan el listado completo y el resumen de totales de cubiertas en pañol.")
 
-    with open(ruta_png, "rb") as f:
-        msg.add_attachment(f.read(), maintype="image", subtype="png",
-                           filename=os.path.basename(ruta_png))
+    for ruta in rutas_png:
+        with open(ruta, "rb") as f:
+            datos = f.read()
+        msg.add_attachment(datos, maintype="image", subtype="png", filename=os.path.basename(ruta))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(GMAIL_USER, GMAIL_APP_PASS)
+        smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         smtp.send_message(msg)
-    print("Correo enviado a:", DESTINATARIO)
 
-# =====================================================
-# AVISO DE ERROR POR GMAIL
-# =====================================================
+
 def enviar_error(error_txt):
-    try:
-        msg = EmailMessage()
-        hoy = datetime.now().strftime("%d/%m/%Y %H:%M")
-        msg["Subject"] = f"⚠️ FALLÓ la captura de Cubiertas en pañol - {hoy}"
-        msg["From"]    = GMAIL_USER
-        msg["To"]      = DESTINATARIO
-        msg.set_content(
-            f"El script de captura falló el {hoy}.\n\n"
-            f"Detalle del error:\n\n{error_txt}"
-        )
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(GMAIL_USER, GMAIL_APP_PASS)
-            smtp.send_message(msg)
-        print("Mail de ERROR enviado a:", DESTINATARIO)
-    except Exception as ex:
-        print("[!] No se pudo enviar el mail de error:", ex)
+    msg = EmailMessage()
+    msg["Subject"] = "ERROR - Reporte de cubiertas en pañol"
+    msg["From"] = GMAIL_USER
+    msg["To"] = GMAIL_DEST
+    msg.set_content(
+        "Ocurrió un error al generar el reporte de cubiertas en pañol.\n\n"
+        f"Detalle del error:\n{error_txt}"
+    )
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        smtp.send_message(msg)
 
-# =====================================================
-# MAIN
-# =====================================================
+
 if __name__ == "__main__":
     driver = crear_driver()
     try:
         login(driver)
-        png = capturar_totales(driver)
-        enviar_gmail(png)
-    except Exception:
-        error_txt = traceback.format_exc()
-        print("[!] ERROR:\n", error_txt)
-        enviar_error(error_txt)   # te avisa por mail
-        raise                      # marca el run como fallido en GitHub Actions
+        capturar_cubiertas_panol(driver)
+        enviar_gmail([LISTADO_PNG, TOTALES_PNG])
+    except Exception as e:
+        try:
+            enviar_error(str(e))
+        except Exception:
+            pass
+        raise
     finally:
         driver.quit()
