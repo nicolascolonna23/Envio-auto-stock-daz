@@ -1,10 +1,12 @@
 # captura_cubiertas_panol.py
 # Login menú -> openLink() handoff a Cubiertas -> reporte Stock en Pañol
 # -> click "Totales" (AJAX) -> captura del ReportViewer -> Gmail
+# Si algo falla, avisa por mail al mismo destinatario.
 
 import os
 import time
 import smtplib
+import traceback
 from email.message import EmailMessage
 from datetime import datetime
 
@@ -170,7 +172,7 @@ def capturar_totales(driver):
     return ARCHIVO_PNG
 
 # =====================================================
-# ENVIAR POR GMAIL
+# ENVIAR CAPTURA POR GMAIL
 # =====================================================
 def enviar_gmail(ruta_png):
     msg = EmailMessage()
@@ -190,6 +192,27 @@ def enviar_gmail(ruta_png):
     print("Correo enviado a:", DESTINATARIO)
 
 # =====================================================
+# AVISO DE ERROR POR GMAIL
+# =====================================================
+def enviar_error(error_txt):
+    try:
+        msg = EmailMessage()
+        hoy = datetime.now().strftime("%d/%m/%Y %H:%M")
+        msg["Subject"] = f"⚠️ FALLÓ la captura de Cubiertas en pañol - {hoy}"
+        msg["From"]    = GMAIL_USER
+        msg["To"]      = DESTINATARIO
+        msg.set_content(
+            f"El script de captura falló el {hoy}.\n\n"
+            f"Detalle del error:\n\n{error_txt}"
+        )
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(GMAIL_USER, GMAIL_APP_PASS)
+            smtp.send_message(msg)
+        print("Mail de ERROR enviado a:", DESTINATARIO)
+    except Exception as ex:
+        print("[!] No se pudo enviar el mail de error:", ex)
+
+# =====================================================
 # MAIN
 # =====================================================
 if __name__ == "__main__":
@@ -198,5 +221,10 @@ if __name__ == "__main__":
         login(driver)
         png = capturar_totales(driver)
         enviar_gmail(png)
+    except Exception:
+        error_txt = traceback.format_exc()
+        print("[!] ERROR:\n", error_txt)
+        enviar_error(error_txt)   # te avisa por mail
+        raise                      # marca el run como fallido en GitHub Actions
     finally:
         driver.quit()
