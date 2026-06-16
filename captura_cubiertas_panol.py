@@ -29,7 +29,7 @@ DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
 # --- URLs ---
 URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
 URL_CUBIERTAS = "https://cloud.dazsistemas.com.ar/cubiertas/Default.aspx"   # inicializa Session("daz")
-URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/Reportes/Stock_Panol.aspx"
+URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"  # página del menú que prepara el reporte
 
 ARCHIVO_PNG = "totales_cubiertas.png"
 
