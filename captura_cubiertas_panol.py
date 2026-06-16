@@ -100,17 +100,13 @@ def _click_totales(driver):
 
 
 def _capturar_reporte(driver, ruta_png):
-    elemento = None
-    for selector in SELECTORES_REPORTE:
-        encontrados = driver.find_elements(By.CSS_SELECTOR, selector)
-        if encontrados:
-            elemento = encontrados[0]
-            break
-
-    if elemento is not None:
-        elemento.screenshot(ruta_png)
-    else:
-        driver.save_screenshot(ruta_png)
+    alto_total = driver.execute_script(
+        "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
+    )
+    driver.set_window_size(1920, alto_total + 200)
+    time.sleep(1)
+    driver.save_screenshot(ruta_png)
+    driver.set_window_size(1920, 1400)
 
 
 def capturar_cubiertas_panol(driver):
