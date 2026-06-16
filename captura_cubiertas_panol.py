@@ -44,10 +44,10 @@ def login(driver):
     driver.get(URL_LOGIN)
     wait = WebDriverWait(driver, 20)
     campo_usuario = wait.until(EC.presence_of_element_located((By.ID, "txtUsuario")))
-    campo_password = driver.find_element(By.ID, "txtPassword")
+    campo_password = driver.find_element(By.ID, "txtPass")
     campo_usuario.send_keys(USUARIO)
     campo_password.send_keys(PASSWORD)
-    driver.find_element(By.ID, "btnIngresar").click()
+    driver.find_element(By.ID, "btnLogin").click()
     wait.until(EC.url_contains("/menu/"))
 
 
