@@ -1,6 +1,6 @@
 # captura_cubiertas_panol.py
 # Login menú -> openLink() handoff a Cubiertas -> reporte Stock en Pañol
-# -> botón "Totales" -> captura ReportViewer -> Gmail
+# -> click "Totales" (AJAX) -> captura del ReportViewer -> Gmail
 
 import os
 import time
@@ -26,9 +26,7 @@ GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]
 DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
 
 URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
-# Handoff de sesión al módulo Cubiertas (lo mismo que hace el ícono del menú)
 URL_CUB_LOGIN = "https://cloud.dazsistemas.com.ar/cubiertas/Login.aspx?empresa=853"
-# Página del menú que prepara el reporte de stock en pañol
 URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"
 
 ARCHIVO_PNG = "totales_cubiertas.png"
@@ -66,7 +64,7 @@ def login(driver):
 # HELPERS
 # =====================================================
 def _entrar_cubiertas(driver):
-    """Replica el ícono CUBIERTAS: llama a openLink() para autenticar el módulo."""
+    """Replica el ícono CUBIERTAS: openLink() autentica el módulo."""
     handles_antes = list(driver.window_handles)
     try:
         driver.execute_script(
@@ -74,80 +72,85 @@ def _entrar_cubiertas(driver):
         )
         time.sleep(7)
     except Exception as ex:
-        print("[!] openLink no disponible, uso URL directa:", ex)
+        print("[!] openLink no disponible:", ex)
 
-    # Si abrió una ventana/pestaña nueva, cambiar a ella
     nuevas = [h for h in driver.window_handles if h not in handles_antes]
     if nuevas:
         driver.switch_to.window(nuevas[-1])
         time.sleep(3)
 
-    # Fallback: si seguimos en el menú, entrar por la URL del handoff
     if "/menu/" in driver.current_url.lower():
         driver.get(URL_CUB_LOGIN)
         time.sleep(6)
 
     print("Entró a CUBIERTAS:", driver.current_url)
-    return True
 
 
-def _buscar_totales(driver):
-    for e in driver.find_elements(
-        By.XPATH,
-        "//a | //button | //span | //td | //input[@type='button'] | //input[@type='submit']"
-    ):
+def _click_totales(driver):
+    """Clickea el elemento cuyo texto es exactamente 'Totales' (prioriza <a>)."""
+    def buscar(ctx):
+        cands = ctx.find_elements(By.XPATH, "//a | //input | //span | //div | //td")
+        for pref in ("a", "input", "span", "div", "td"):
+            for e in cands:
+                try:
+                    if e.tag_name != pref:
+                        continue
+                    t = (e.text or e.get_attribute("value") or "").strip().lower()
+                    if t == "totales":
+                        driver.execute_script("arguments[0].click();", e)
+                        print("Click en 'Totales' (tag:", pref, ")")
+                        return True
+                except Exception:
+                    pass
+        return False
+
+    if buscar(driver):
+        return True
+    # por si el reporte está dentro de un iframe
+    for fr in driver.find_elements(By.TAG_NAME, "iframe"):
         try:
-            txt = (e.text or e.get_attribute("value") or "").strip().lower()
-            if txt == "totales" or ("total" in txt and len(txt) < 15):
-                driver.execute_script("arguments[0].click();", e)
-                print("Click en 'Totales':", txt)
+            driver.switch_to.frame(fr)
+            if buscar(driver):
+                driver.switch_to.default_content()
                 return True
+            driver.switch_to.default_content()
         except Exception:
-            pass
+            driver.switch_to.default_content()
     return False
 
 # =====================================================
 # CAPTURAR TOTALES
 # =====================================================
 def capturar_totales(driver):
-    # 1) Autenticar el módulo Cubiertas (handoff openLink)
+    # 1) Autenticar el módulo Cubiertas
     _entrar_cubiertas(driver)
 
-    # 2) Ir al reporte de stock en pañol (ya con sesión del módulo activa)
+    # 2) Ir al reporte de stock en pañol
     driver.get(URL_PANOL)
     time.sleep(12)  # el ReportViewer tarda en renderizar
     print("URL reporte:", driver.current_url)
     if "login" in driver.current_url.lower():
-        print("[!] OJO: terminó en login del módulo. La sesión no se autenticó.")
+        print("[!] OJO: terminó en login del módulo.")
 
-    # 3) Click en "Totales" (página y, si no, dentro de iframes)
-    clickeado = _buscar_totales(driver)
-    if not clickeado:
-        for fr in driver.find_elements(By.TAG_NAME, "iframe"):
-            try:
-                driver.switch_to.frame(fr)
-                if _buscar_totales(driver):
-                    clickeado = True
-                    driver.switch_to.default_content()
-                    break
-                driver.switch_to.default_content()
-            except Exception:
-                driver.switch_to.default_content()
-    if not clickeado:
-        print("[!] No se encontró 'Totales'. Capturo el reporte igual.")
+    # 3) Click en "Totales" (dispara la recarga AJAX hacia el resumen)
+    if _click_totales(driver):
+        time.sleep(10)  # esperar que cargue la vista de totales
+    else:
+        print("[!] No se encontró 'Totales'. Capturo el reporte como está.")
+        time.sleep(3)
 
-    time.sleep(8)
-
-    # 4) Capturar el área del ReportViewer
+    # 4) Capturar el ReportViewer (es un <span>, no un div)
     selectores = [
-        (By.CSS_SELECTOR, "div[id*='ReportViewer']"),
-        (By.CSS_SELECTOR, "table[id*='ReportViewer']"),
-        (By.CSS_SELECTOR, "div[id*='VisibleReportContent']"),
+        "span[id*='rvReporte_ReportViewer']",
+        "[id*='rvReporte_ReportViewer']",
+        "[id*='ReportViewer']",
+        "[id*='oReportDiv']",
+        "div.contenido",
     ]
     elemento = None
-    for by, sel in selectores:
+    for sel in selectores:
         try:
-            elemento = driver.find_element(by, sel)
+            elemento = driver.find_element(By.CSS_SELECTOR, sel)
             print("Capturando elemento:", sel)
             break
         except Exception:
