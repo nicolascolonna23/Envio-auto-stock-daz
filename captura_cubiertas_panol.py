@@ -1,6 +1,6 @@
 # captura_cubiertas_panol.py
-# Login -> módulo Cubiertas (inicializa sesión) -> reporte Stock en Pañol
-# -> botón "Totales" -> captura del ReportViewer -> enviar por Gmail
+# Login menú -> CLICK ícono CUBIERTAS (autentica el módulo) ->
+# CLICK "Cubiertas en pañol" -> botón "Totales" -> captura ReportViewer -> Gmail
 
 import os
 import time
@@ -16,20 +16,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # =====================================================
-# VARIABLES (se leen de variables de entorno, NUNCA escritas en el código)
+# VARIABLES
 # =====================================================
 USUARIO   = os.environ["CUBIERTAS_USUARIO"]
 PASSWORD  = os.environ["CUBIERTAS_PASSWORD"]
 
-# --- Gmail: usar una "Contraseña de aplicación" de Google, NO la del correo ---
-GMAIL_USER     = os.environ["GMAIL_USER"]          # tu_correo@gmail.com (el que envía)
-GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]  # contraseña de aplicación de 16 dígitos
+GMAIL_USER     = os.environ["GMAIL_USER"]
+GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]
 DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
 
-# --- URLs ---
-URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
-URL_CUBIERTAS = "https://cloud.dazsistemas.com.ar/cubiertas/Default.aspx"   # inicializa Session("daz")
-URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"  # página del menú que prepara el reporte
+URL_LOGIN = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
 
 ARCHIVO_PNG = "totales_cubiertas.png"
 
@@ -46,7 +42,7 @@ def crear_driver():
     return webdriver.Chrome(options=options)
 
 # =====================================================
-# LOGIN
+# LOGIN (menú principal)
 # =====================================================
 def login(driver):
     wait = WebDriverWait(driver, 30)
@@ -63,15 +59,57 @@ def login(driver):
     print("URL POST LOGIN:", driver.current_url)
 
 # =====================================================
-# CAPTURAR TOTALES
+# HELPERS DE NAVEGACIÓN
 # =====================================================
+def _entrar_cubiertas(driver):
+    """Click en el ícono CUBIERTAS del menú (autentica el sub-sistema)."""
+    handles_antes = driver.window_handles
+    target = None
+    for a in driver.find_elements(By.XPATH, "//a"):
+        try:
+            href = (a.get_attribute("href") or "").lower()
+            txt  = (a.text or "").strip().lower()
+            if "cubiertas" in href or txt == "cubiertas":
+                target = a
+                break
+        except Exception:
+            pass
+    if target is None:
+        print("[!] No se encontró el ícono CUBIERTAS en el menú.")
+        return False
+    driver.execute_script("arguments[0].click();", target)
+    time.sleep(7)
+    # si abrió en una ventana/pestaña nueva, cambiar a ella
+    if len(driver.window_handles) > len(handles_antes):
+        driver.switch_to.window(driver.window_handles[-1])
+    print("Entró a CUBIERTAS:", driver.current_url)
+    return True
+
+
+def _click_por_texto(driver, palabras, descripcion):
+    """Clickea el primer elemento cuyo texto o href contenga alguna palabra."""
+    elementos = driver.find_elements(
+        By.XPATH,
+        "//a | //input[@type='button'] | //input[@type='submit'] | //span | //td | //div"
+    )
+    for e in elementos:
+        try:
+            txt  = (e.text or e.get_attribute("value") or "").strip().lower()
+            href = (e.get_attribute("href") or "").lower()
+            if any(p in txt for p in palabras) or any(p in href for p in palabras):
+                driver.execute_script("arguments[0].click();", e)
+                print(f"Click {descripcion}: {txt or href}")
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _buscar_totales(driver):
-    """Busca el elemento 'Totales' y lo clickea. Devuelve True si pudo."""
-    candidatos = driver.find_elements(
+    for e in driver.find_elements(
         By.XPATH,
         "//a | //button | //span | //td | //input[@type='button'] | //input[@type='submit']"
-    )
-    for e in candidatos:
+    ):
         try:
             txt = (e.text or e.get_attribute("value") or "").strip().lower()
             if txt == "totales" or ("total" in txt and len(txt) < 15):
@@ -82,19 +120,28 @@ def _buscar_totales(driver):
             pass
     return False
 
-
+# =====================================================
+# CAPTURAR TOTALES
+# =====================================================
 def capturar_totales(driver):
-    # 1) Entrar al módulo Cubiertas -> inicializa Session("daz") del lado del servidor
-    driver.get(URL_CUBIERTAS)
-    time.sleep(6)
-    print("URL módulo cubiertas:", driver.current_url)
+    # 1) Autenticar el módulo Cubiertas haciendo CLICK en el ícono
+    if not _entrar_cubiertas(driver):
+        driver.save_screenshot(ARCHIVO_PNG)
+        return ARCHIVO_PNG
 
-    # 2) Ahora sí, ir al reporte de stock en pañol (la sesión ya está armada)
-    driver.get(URL_PANOL)
+    # 2) Ir a "Cubiertas en pañol" clickeando el link del menú
+    time.sleep(3)
+    clic = _click_por_texto(driver, ["panol", "pañol"], "Cubiertas en pañol")
+    if not clic:
+        print("[!] No se encontró 'Cubiertas en pañol'. Intento URL directa (ya con sesión).")
+        driver.get("https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx")
+
     time.sleep(12)  # el ReportViewer tarda en renderizar
     print("URL reporte:", driver.current_url)
+    if "login" in driver.current_url.lower():
+        print("[!] OJO: terminó en el login del módulo. La sesión no se autenticó.")
 
-    # 3) Click en "Totales" (busca en la página y, si no, dentro de iframes)
+    # 3) Click en "Totales" (página y, si no, dentro de iframes)
     clickeado = _buscar_totales(driver)
     if not clickeado:
         for fr in driver.find_elements(By.TAG_NAME, "iframe"):
@@ -110,9 +157,9 @@ def capturar_totales(driver):
     if not clickeado:
         print("[!] No se encontró 'Totales'. Capturo el reporte igual.")
 
-    time.sleep(8)  # esperar que el reporte muestre los totales
+    time.sleep(8)
 
-    # 4) Capturar el área del ReportViewer (no la primera <table> cualquiera)
+    # 4) Capturar el área del ReportViewer
     selectores = [
         (By.CSS_SELECTOR, "div[id*='ReportViewer']"),
         (By.CSS_SELECTOR, "table[id*='ReportViewer']"),
