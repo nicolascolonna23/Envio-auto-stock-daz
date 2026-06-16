@@ -1,6 +1,6 @@
 # captura_cubiertas_panol.py
-# Login menú -> CLICK ícono CUBIERTAS (autentica el módulo) ->
-# CLICK "Cubiertas en pañol" -> botón "Totales" -> captura ReportViewer -> Gmail
+# Login menú -> openLink() handoff a Cubiertas -> reporte Stock en Pañol
+# -> botón "Totales" -> captura ReportViewer -> Gmail
 
 import os
 import time
@@ -25,7 +25,11 @@ GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]
 DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
 
-URL_LOGIN = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
+URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
+# Handoff de sesión al módulo Cubiertas (lo mismo que hace el ícono del menú)
+URL_CUB_LOGIN = "https://cloud.dazsistemas.com.ar/cubiertas/Login.aspx?empresa=853"
+# Página del menú que prepara el reporte de stock en pañol
+URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx"
 
 ARCHIVO_PNG = "totales_cubiertas.png"
 
@@ -59,50 +63,32 @@ def login(driver):
     print("URL POST LOGIN:", driver.current_url)
 
 # =====================================================
-# HELPERS DE NAVEGACIÓN
+# HELPERS
 # =====================================================
 def _entrar_cubiertas(driver):
-    """Click en el ícono CUBIERTAS del menú (autentica el sub-sistema)."""
-    handles_antes = driver.window_handles
-    target = None
-    for a in driver.find_elements(By.XPATH, "//a"):
-        try:
-            href = (a.get_attribute("href") or "").lower()
-            txt  = (a.text or "").strip().lower()
-            if "cubiertas" in href or txt == "cubiertas":
-                target = a
-                break
-        except Exception:
-            pass
-    if target is None:
-        print("[!] No se encontró el ícono CUBIERTAS en el menú.")
-        return False
-    driver.execute_script("arguments[0].click();", target)
-    time.sleep(7)
-    # si abrió en una ventana/pestaña nueva, cambiar a ella
-    if len(driver.window_handles) > len(handles_antes):
-        driver.switch_to.window(driver.window_handles[-1])
+    """Replica el ícono CUBIERTAS: llama a openLink() para autenticar el módulo."""
+    handles_antes = list(driver.window_handles)
+    try:
+        driver.execute_script(
+            "openLink('W24CUB', '853', '/cubiertas/Login.aspx?empresa=853');"
+        )
+        time.sleep(7)
+    except Exception as ex:
+        print("[!] openLink no disponible, uso URL directa:", ex)
+
+    # Si abrió una ventana/pestaña nueva, cambiar a ella
+    nuevas = [h for h in driver.window_handles if h not in handles_antes]
+    if nuevas:
+        driver.switch_to.window(nuevas[-1])
+        time.sleep(3)
+
+    # Fallback: si seguimos en el menú, entrar por la URL del handoff
+    if "/menu/" in driver.current_url.lower():
+        driver.get(URL_CUB_LOGIN)
+        time.sleep(6)
+
     print("Entró a CUBIERTAS:", driver.current_url)
     return True
-
-
-def _click_por_texto(driver, palabras, descripcion):
-    """Clickea el primer elemento cuyo texto o href contenga alguna palabra."""
-    elementos = driver.find_elements(
-        By.XPATH,
-        "//a | //input[@type='button'] | //input[@type='submit'] | //span | //td | //div"
-    )
-    for e in elementos:
-        try:
-            txt  = (e.text or e.get_attribute("value") or "").strip().lower()
-            href = (e.get_attribute("href") or "").lower()
-            if any(p in txt for p in palabras) or any(p in href for p in palabras):
-                driver.execute_script("arguments[0].click();", e)
-                print(f"Click {descripcion}: {txt or href}")
-                return True
-        except Exception:
-            pass
-    return False
 
 
 def _buscar_totales(driver):
@@ -124,22 +110,15 @@ def _buscar_totales(driver):
 # CAPTURAR TOTALES
 # =====================================================
 def capturar_totales(driver):
-    # 1) Autenticar el módulo Cubiertas haciendo CLICK en el ícono
-    if not _entrar_cubiertas(driver):
-        driver.save_screenshot(ARCHIVO_PNG)
-        return ARCHIVO_PNG
+    # 1) Autenticar el módulo Cubiertas (handoff openLink)
+    _entrar_cubiertas(driver)
 
-    # 2) Ir a "Cubiertas en pañol" clickeando el link del menú
-    time.sleep(3)
-    clic = _click_por_texto(driver, ["panol", "pañol"], "Cubiertas en pañol")
-    if not clic:
-        print("[!] No se encontró 'Cubiertas en pañol'. Intento URL directa (ya con sesión).")
-        driver.get("https://cloud.dazsistemas.com.ar/cubiertas/stock_panol.aspx")
-
+    # 2) Ir al reporte de stock en pañol (ya con sesión del módulo activa)
+    driver.get(URL_PANOL)
     time.sleep(12)  # el ReportViewer tarda en renderizar
     print("URL reporte:", driver.current_url)
     if "login" in driver.current_url.lower():
-        print("[!] OJO: terminó en el login del módulo. La sesión no se autenticó.")
+        print("[!] OJO: terminó en login del módulo. La sesión no se autenticó.")
 
     # 3) Click en "Totales" (página y, si no, dentro de iframes)
     clickeado = _buscar_totales(driver)
