@@ -1,10 +1,10 @@
 # captura_cubiertas_panol.py
-# Login -> Cubiertas en pañol -> botón "Totales" -> captura del elemento -> enviar por Gmail
+# Login -> módulo Cubiertas (inicializa sesión) -> reporte Stock en Pañol
+# -> botón "Totales" -> captura del ReportViewer -> enviar por Gmail
 
 import os
 import time
 import smtplib
-import tempfile
 from email.message import EmailMessage
 from datetime import datetime
 
@@ -27,8 +27,9 @@ GMAIL_APP_PASS = os.environ["GMAIL_APP_PASSWORD"]  # contraseña de aplicación 
 DESTINATARIO   = os.environ.get("GMAIL_DEST", "nscolonna68@gmail.com")
 
 # --- URLs ---
-URL_LOGIN  = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
-URL_PANOL  = "https://cloud.dazsistemas.com.ar/cubiertas/Reportes/Stock_Panol.aspx"
+URL_LOGIN     = "https://cloud.dazsistemas.com.ar/menu/Login.aspx"
+URL_CUBIERTAS = "https://cloud.dazsistemas.com.ar/cubiertas/Default.aspx"   # inicializa Session("daz")
+URL_PANOL     = "https://cloud.dazsistemas.com.ar/cubiertas/Reportes/Stock_Panol.aspx"
 
 ARCHIVO_PNG = "totales_cubiertas.png"
 
@@ -64,41 +65,77 @@ def login(driver):
 # =====================================================
 # CAPTURAR TOTALES
 # =====================================================
-def capturar_totales(driver):
-    # 1) Ir directo a la pantalla "Cubiertas en pañol"
-    driver.get(URL_PANOL)
-    time.sleep(8)
-
-    # 2) Click en el botón "Totales" (lo busca por texto, tolerante a mayúsculas)
+def _buscar_totales(driver):
+    """Busca el elemento 'Totales' y lo clickea. Devuelve True si pudo."""
     candidatos = driver.find_elements(
         By.XPATH,
-        "//button | //a | //span | //input[@type='button'] | //input[@type='submit']"
+        "//a | //button | //span | //td | //input[@type='button'] | //input[@type='submit']"
     )
-    clickeado = False
     for e in candidatos:
         try:
             txt = (e.text or e.get_attribute("value") or "").strip().lower()
-            if "total" in txt:
+            if txt == "totales" or ("total" in txt and len(txt) < 15):
                 driver.execute_script("arguments[0].click();", e)
-                print("Click en:", txt)
-                clickeado = True
-                break
+                print("Click en 'Totales':", txt)
+                return True
         except Exception:
             pass
+    return False
+
+
+def capturar_totales(driver):
+    # 1) Entrar al módulo Cubiertas -> inicializa Session("daz") del lado del servidor
+    driver.get(URL_CUBIERTAS)
+    time.sleep(6)
+    print("URL módulo cubiertas:", driver.current_url)
+
+    # 2) Ahora sí, ir al reporte de stock en pañol (la sesión ya está armada)
+    driver.get(URL_PANOL)
+    time.sleep(12)  # el ReportViewer tarda en renderizar
+    print("URL reporte:", driver.current_url)
+
+    # 3) Click en "Totales" (busca en la página y, si no, dentro de iframes)
+    clickeado = _buscar_totales(driver)
     if not clickeado:
-        print("[!] No se encontró el botón 'Totales'. Capturo la pantalla completa igual.")
+        for fr in driver.find_elements(By.TAG_NAME, "iframe"):
+            try:
+                driver.switch_to.frame(fr)
+                if _buscar_totales(driver):
+                    clickeado = True
+                    driver.switch_to.default_content()
+                    break
+                driver.switch_to.default_content()
+            except Exception:
+                driver.switch_to.default_content()
+    if not clickeado:
+        print("[!] No se encontró 'Totales'. Capturo el reporte igual.")
 
-    time.sleep(6)  # esperar que carguen los totales
+    time.sleep(8)  # esperar que el reporte muestre los totales
 
-    # 3) Captura SOLO del elemento de totales
-    #    COMPLETAR el selector del contenedor de la tabla/sección de totales.
-    #    Ejemplos: (By.ID, "gridTotales") | (By.CSS_SELECTOR, "table.totales")
+    # 4) Capturar el área del ReportViewer (no la primera <table> cualquiera)
+    selectores = [
+        (By.CSS_SELECTOR, "div[id*='ReportViewer']"),
+        (By.CSS_SELECTOR, "table[id*='ReportViewer']"),
+        (By.CSS_SELECTOR, "div[id*='VisibleReportContent']"),
+    ]
+    elemento = None
+    for by, sel in selectores:
+        try:
+            elemento = driver.find_element(by, sel)
+            print("Capturando elemento:", sel)
+            break
+        except Exception:
+            pass
+
     try:
-        elemento = driver.find_element(By.CSS_SELECTOR, "table")  # <-- AJUSTAR selector
-        elemento.screenshot(ARCHIVO_PNG)
-        print("Captura del elemento guardada:", ARCHIVO_PNG)
+        if elemento is not None:
+            elemento.screenshot(ARCHIVO_PNG)
+        else:
+            print("[!] No se ubicó el ReportViewer, capturo pantalla completa.")
+            driver.save_screenshot(ARCHIVO_PNG)
+        print("Captura guardada:", ARCHIVO_PNG)
     except Exception as ex:
-        print("[!] No se pudo capturar el elemento, capturo pantalla completa:", ex)
+        print("[!] Fallo la captura del elemento, capturo pantalla completa:", ex)
         driver.save_screenshot(ARCHIVO_PNG)
 
     return ARCHIVO_PNG
