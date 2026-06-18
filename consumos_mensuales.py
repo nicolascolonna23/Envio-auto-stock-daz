@@ -114,39 +114,34 @@ def _parsear_numero(txt):
 
 
 def _extraer_tabla_actual(driver):
-    """Devuelve lista de (patente, total) de la página visible."""
     driver.switch_to.default_content()
     resultado = []
 
     contextos = [None] + driver.find_elements(By.TAG_NAME, "iframe")
-    for ctx in contextos:
+    for i, ctx in enumerate(contextos):
         if ctx is not None:
             try:
                 driver.switch_to.frame(ctx)
+                print(f"  [iframe {i}]")
             except Exception:
                 continue
+        else:
+            print(f"  [contexto principal]")
 
         tablas = driver.find_elements(By.TAG_NAME, "table")
-        # Tomar la tabla con más filas de datos
-        mejor = max(tablas, key=lambda t: len(t.find_elements(By.TAG_NAME, "tr")), default=None)
+        print(f"  Tablas encontradas: {len(tablas)}")
 
-        if mejor:
-            for fila in mejor.find_elements(By.TAG_NAME, "tr"):
+        for j, tabla in enumerate(tablas):
+            filas_tabla = tabla.find_elements(By.TAG_NAME, "tr")
+            print(f"  Tabla {j}: {len(filas_tabla)} filas")
+            # Mostrar primeras 3 filas para ver estructura
+            for k, fila in enumerate(filas_tabla[:3]):
                 celdas = fila.find_elements(By.TAG_NAME, "td")
-                if len(celdas) < IDX_TOTAL + 1:
-                    continue
-                patente = celdas[IDX_PATENTE].text.strip()
-                if not REGEX_PATENTE.match(patente):
-                    continue
-                total = _parsear_numero(celdas[IDX_TOTAL].text)
-                if total is None:
-                    continue
-                resultado.append((patente, total))
+                textos = [c.text.strip()[:20] for c in celdas]
+                print(f"    Fila {k} ({len(celdas)} celdas): {textos}")
 
-        if resultado:
-            break
+        driver.switch_to.default_content()
 
-    driver.switch_to.default_content()
     return resultado
 
 
