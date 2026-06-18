@@ -19,23 +19,17 @@ URL_CONSUMOS   = "https://cloud.dazsistemas.com.ar/stock/Consumos_Mensuales.aspx
 SPREADSHEET_ID = "1u7cckay0IJ60bfoKk2OZo-TjCvTbH9O1wKxNFdSKDCQ"
 HOJA           = "GASTOS REPARACIONES"
 
-USUARIO           = os.environ["CUBIERTAS_USUARIO"]
-PASSWORD          = os.environ["CUBIERTAS_PASSWORD"]
-GOOGLE_CREDS_RAW  = os.environ["GOOGLE_CREDENTIALS"]
-GMAIL_USER        = os.environ["GMAIL_USER"]
+USUARIO            = os.environ["CUBIERTAS_USUARIO"]
+PASSWORD           = os.environ["CUBIERTAS_PASSWORD"]
+GOOGLE_CREDS_RAW   = os.environ["GOOGLE_CREDENTIALS"]
+GMAIL_USER         = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-GMAIL_DEST        = os.environ["GMAIL_DEST"]
+GMAIL_DEST         = os.environ["GMAIL_DEST"]
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-
-# Patentes argentinas: ABC123 o AB123CD
-REGEX_PATENTE = re.compile(r'^[A-Z]{2,3}[0-9]{3}[A-Z]{0,2}[0-9]{0,2}$')
-
-IDX_PATENTE = 2   # columna Patente (0-based)
-IDX_TOTAL   = 11  # columna Total   (0-based)
 
 
 def crear_driver():
@@ -106,42 +100,50 @@ def buscar_consumos(driver, mes, anio):
 
 
 def _parsear_numero(txt):
-    limpio = txt.replace("$", "").replace(" ", "").replace(".", "").replace(",", ".").strip()
+    # Formato argentino: 1.234,56 → 1234.56
+    limpio = txt.replace("$", "").replace(" ", "").strip()
+    # Quitar paréntesis de negativos: (500) → -500
+    negativo = limpio.startswith("(") and limpio.endswith(")")
+    if negativo:
+        limpio = limpio[1:-1]
+    limpio = limpio.replace(".", "").replace(",", ".")
     try:
-        return float(limpio)
+        valor = float(limpio)
+        return -valor if negativo else valor
     except ValueError:
         return None
 
 
 def _extraer_tabla_actual(driver):
+    """
+    La tabla de datos tiene exactamente 13 columnas por fila:
+    [vacío, Unidad, Interno, Patente, Año, Período, Km, Litros, Importe, Lub, Cub, Rep, Total]
+    Las filas de subtotal tienen Patente vacía → se descartan.
+    """
     driver.switch_to.default_content()
     resultado = []
 
-    contextos = [None] + driver.find_elements(By.TAG_NAME, "iframe")
-    for i, ctx in enumerate(contextos):
-        if ctx is not None:
-            try:
-                driver.switch_to.frame(ctx)
-                print(f"  [iframe {i}]")
-            except Exception:
+    for tabla in driver.find_elements(By.TAG_NAME, "table"):
+        datos_tabla = []
+        for fila in tabla.find_elements(By.TAG_NAME, "tr"):
+            celdas = fila.find_elements(By.TAG_NAME, "td")
+            if len(celdas) != 13:
                 continue
-        else:
-            print(f"  [contexto principal]")
+            patente = celdas[3].text.strip()
+            total_txt = celdas[12].text.strip()
+            # Descartar filas de encabezado o subtotal (patente vacía o es texto de header)
+            if not patente or patente == "Patente" or "/" in patente:
+                continue
+            total = _parsear_numero(total_txt)
+            if total is None:
+                continue
+            datos_tabla.append((patente, total))
 
-        tablas = driver.find_elements(By.TAG_NAME, "table")
-        print(f"  Tablas encontradas: {len(tablas)}")
+        if datos_tabla:
+            resultado.extend(datos_tabla)
+            break  # La primera tabla con datos válidos es la correcta
 
-        for j, tabla in enumerate(tablas):
-            filas_tabla = tabla.find_elements(By.TAG_NAME, "tr")
-            print(f"  Tabla {j}: {len(filas_tabla)} filas")
-            # Mostrar primeras 3 filas para ver estructura
-            for k, fila in enumerate(filas_tabla[:3]):
-                celdas = fila.find_elements(By.TAG_NAME, "td")
-                textos = [c.text.strip()[:20] for c in celdas]
-                print(f"    Fila {k} ({len(celdas)} celdas): {textos}")
-
-        driver.switch_to.default_content()
-
+    print(f"  Filas extraídas esta página: {len(resultado)}")
     return resultado
 
 
@@ -149,10 +151,8 @@ def extraer_todos_los_datos(driver):
     todos = []
     while True:
         filas = _extraer_tabla_actual(driver)
-        print(f"  Página: {len(filas)} filas encontradas")
         todos.extend(filas)
 
-        # Buscar botón "siguiente página"
         try:
             siguiente = driver.find_element(By.XPATH,
                 "//input[@title='Next Page' or @title='Página siguiente' or @title='next page'] | "
