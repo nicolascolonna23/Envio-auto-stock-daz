@@ -121,32 +121,41 @@ def capturar_todas_las_paginas_listado(driver):
 
 
 def _buscar_boton_totales(driver):
-    candidatos = driver.find_elements(
-        By.XPATH,
+    driver.switch_to.default_content()
+    xpath = (
         "//a[normalize-space()='Totales'] | //input[@value='Totales'] | "
+        "//button[normalize-space()='Totales'] | "
+        "//input[@type='button' and @value='Totales'] | "
+        "//input[@type='submit' and @value='Totales'] | "
         "//span[normalize-space()='Totales'] | //div[normalize-space()='Totales'] | "
-        "//td[normalize-space()='Totales']",
+        "//td[normalize-space()='Totales']"
     )
+    candidatos = driver.find_elements(By.XPATH, xpath)
     if candidatos:
         return candidatos[0]
 
     for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
-        driver.switch_to.frame(iframe)
-        candidatos = driver.find_elements(
-            By.XPATH,
-            "//a[normalize-space()='Totales'] | //input[@value='Totales'] | "
-            "//span[normalize-space()='Totales'] | //div[normalize-space()='Totales'] | "
-            "//td[normalize-space()='Totales']",
-        )
-        if candidatos:
-            return candidatos[0]
-        driver.switch_to.default_content()
+        try:
+            driver.switch_to.frame(iframe)
+            candidatos = driver.find_elements(By.XPATH, xpath)
+            if candidatos:
+                return candidatos[0]
+        except Exception:
+            pass
+        finally:
+            driver.switch_to.default_content()
 
     return None
 
 
 def _click_totales(driver):
+    # Recargar la página para estar en página 1 con el botón Totales visible
+    driver.get(URL_PANOL)
     wait = WebDriverWait(driver, 30)
+    wait.until(lambda d: any(
+        d.find_elements(By.CSS_SELECTOR, selector) for selector in SELECTORES_REPORTE
+    ))
+    time.sleep(3)
     boton = wait.until(lambda d: _buscar_boton_totales(d))
     boton.click()
     time.sleep(3)
