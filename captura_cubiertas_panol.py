@@ -19,7 +19,6 @@ GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 GMAIL_DEST = os.environ["GMAIL_DEST"]
 
-LISTADO_PNG = "listado_cubiertas.png"
 TOTALES_PNG = "totales_cubiertas.png"
 
 SELECTORES_REPORTE = [
@@ -67,6 +66,60 @@ def _entrar_cubiertas(driver):
     time.sleep(2)
 
 
+def _capturar_reporte(driver, ruta_png):
+    alto_total = driver.execute_script(
+        "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
+    )
+    driver.set_window_size(1920, alto_total + 200)
+    time.sleep(1)
+    driver.save_screenshot(ruta_png)
+    driver.set_window_size(1920, 1400)
+
+
+def _boton_siguiente_pagina(driver):
+    candidatos = driver.find_elements(
+        By.XPATH,
+        "//input[@title='Next Page'] | //input[@title='Página siguiente'] | "
+        "//a[@title='Next Page'] | //a[@title='Página siguiente'] | "
+        "//input[contains(@class,'rvNextPage')] | //a[contains(@class,'rvNextPage')]",
+    )
+    for btn in candidatos:
+        if btn.is_displayed() and btn.is_enabled():
+            return btn
+    return None
+
+
+def _esta_deshabilitado(boton):
+    disabled = boton.get_attribute("disabled")
+    clase = boton.get_attribute("class") or ""
+    if disabled:
+        return True
+    if "disabled" in clase.lower():
+        return True
+    return False
+
+
+def capturar_todas_las_paginas_listado(driver):
+    rutas = []
+    numero_pagina = 1
+
+    while True:
+        ruta = f"listado_cubiertas_pagina_{numero_pagina}.png"
+        _capturar_reporte(driver, ruta)
+        rutas.append(ruta)
+        print(f"Capturada página {numero_pagina}: {ruta}")
+
+        boton = _boton_siguiente_pagina(driver)
+        if boton is None or _esta_deshabilitado(boton):
+            break
+
+        boton.click()
+        time.sleep(3)
+        numero_pagina += 1
+
+    return rutas
+
+
 def _buscar_boton_totales(driver):
     candidatos = driver.find_elements(
         By.XPATH,
@@ -99,16 +152,6 @@ def _click_totales(driver):
     time.sleep(3)
 
 
-def _capturar_reporte(driver, ruta_png):
-    alto_total = driver.execute_script(
-        "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);"
-    )
-    driver.set_window_size(1920, alto_total + 200)
-    time.sleep(1)
-    driver.save_screenshot(ruta_png)
-    driver.set_window_size(1920, 1400)
-
-
 def capturar_cubiertas_panol(driver):
     _entrar_cubiertas(driver)
     driver.get(URL_PANOL)
@@ -119,20 +162,29 @@ def capturar_cubiertas_panol(driver):
     ))
     time.sleep(2)
 
-    _capturar_reporte(driver, LISTADO_PNG)
+    rutas_listado = capturar_todas_las_paginas_listado(driver)
 
     _click_totales(driver)
     _capturar_reporte(driver, TOTALES_PNG)
 
+    return rutas_listado
 
-def enviar_gmail(rutas_png):
+
+def enviar_gmail(rutas_listado):
+    todas = rutas_listado + [TOTALES_PNG]
+
     msg = EmailMessage()
     msg["Subject"] = "Reporte semanal - Cubiertas en pañol"
     msg["From"] = GMAIL_USER
     msg["To"] = GMAIL_DEST
-    msg.set_content("Se adjuntan el listado completo y el resumen de totales de cubiertas en pañol.")
 
-    for ruta in rutas_png:
+    paginas = len(rutas_listado)
+    msg.set_content(
+        f"Se adjuntan el listado completo ({paginas} página{'s' if paginas > 1 else ''}) "
+        "y el resumen de totales de cubiertas en pañol."
+    )
+
+    for ruta in todas:
         with open(ruta, "rb") as f:
             datos = f.read()
         msg.add_attachment(datos, maintype="image", subtype="png", filename=os.path.basename(ruta))
@@ -160,8 +212,8 @@ if __name__ == "__main__":
     driver = crear_driver()
     try:
         login(driver)
-        capturar_cubiertas_panol(driver)
-        enviar_gmail([LISTADO_PNG, TOTALES_PNG])
+        rutas_listado = capturar_cubiertas_panol(driver)
+        enviar_gmail(rutas_listado)
     except Exception as e:
         try:
             enviar_error(str(e))
